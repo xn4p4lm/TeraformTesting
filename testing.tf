@@ -1,0 +1,305 @@
+provider "aws" {
+  profile    = "andromeda"
+  region     = "us-east-1"
+}
+
+### VPC Configuration ###
+
+# Main Testing VPC
+resource "aws_vpc" "teraform-testing-vpc" {
+  cidr_block = "192.168.255.0/24"
+
+  tags ={
+    Name = "Teraform-testing",
+    purpose = "Testing",
+    created_by = "Teraform"
+  }
+}
+
+# Public subnet in us-east-1a
+resource "aws_subnet" "teraform-testing-pub-a" {
+  vpc_id     = "${aws_vpc.teraform-testing-vpc.id}"
+  cidr_block = "192.168.255.0/26"
+  availability_zone = "us-east-1a"
+
+  tags = {
+    Name = "Teraform-testing-pub-a",
+    purpose = "Testing",
+    created_by = "Teraform"
+  }
+}
+
+# Public subnet in us-east-1b
+resource "aws_subnet" "teraform-testing-pub-b" {
+  vpc_id     = "${aws_vpc.teraform-testing-vpc.id}"
+  cidr_block = "192.168.255.64/26"
+  availability_zone = "us-east-1b"
+
+  tags = {
+    Name = "Teraform-testing-pub-b",
+    purpose = "Testing",
+    created_by = "Teraform"
+  }
+}
+
+# Private subnet in us-east-1a
+resource "aws_subnet" "teraform-testing-priv-a" {
+  vpc_id     = "${aws_vpc.teraform-testing-vpc.id}"
+  cidr_block = "192.168.255.128/26"
+  availability_zone = "us-east-1a"
+
+  tags = {
+    Name = "Teraform-testing-priv-a",
+    purpose = "Testing",
+    created_by = "Teraform"
+  }
+}
+
+# Private subnet in us-east-1b
+resource "aws_subnet" "teraform-testing-priv-b" {
+  vpc_id     = "${aws_vpc.teraform-testing-vpc.id}"
+  cidr_block = "192.168.255.192/26"
+  availability_zone = "us-east-1b"
+
+  tags = {
+    Name = "Teraform-testing-priv-b",
+    purpose = "Testing",
+    created_by = "Teraform"
+  }
+}
+
+# IGW for the public subnet
+resource "aws_internet_gateway" "teraform-testing-gw" {
+  vpc_id = "${aws_vpc.teraform-testing-vpc.id}"
+}
+
+# Create a NAT gateway with an EIP for each private subnet to get internet connectivity
+resource "aws_eip" "nat-1a" {
+  vpc        = true
+  depends_on = ["aws_internet_gateway.teraform-testing-gw"]
+}
+
+# Create a NAT gateway with an EIP for each private subnet to get internet connectivity
+resource "aws_eip" "nat-1b" {
+  vpc        = true
+  depends_on = ["aws_internet_gateway.teraform-testing-gw"]
+}
+
+# Private nat gw in us-east-1a
+resource "aws_nat_gateway" "teraform-testing-priv-a-gw" {
+  subnet_id     = "${aws_subnet.teraform-testing-pub-a.id}"
+  allocation_id = "${aws_eip.nat-1a.id}"
+
+  depends_on = ["aws_internet_gateway.teraform-testing-gw"]
+}
+
+# Private nat gw in us-east-1b
+resource "aws_nat_gateway" "teraform-testing-priv-b-gw" {
+  subnet_id     = "${aws_subnet.teraform-testing-pub-b.id}"
+  allocation_id = "${aws_eip.nat-1b.id}"
+
+  depends_on = ["aws_internet_gateway.teraform-testing-gw"]
+}
+
+# Create a new route table for the public subnet
+# And make it route non-local traffic through the Internet Gateway
+resource "aws_route_table" "teraform-testing-rt-pub" {
+  vpc_id = "${aws_vpc.teraform-testing-vpc.id}"
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = "${aws_internet_gateway.teraform-testing-gw.id}"
+  }
+
+}
+
+# Create a new route table for the private subnet priv-a
+# And make it route non-local traffic through the NAT gateway to the internet
+resource "aws_route_table" "teraform-testing-rt-priv-a" {
+  vpc_id = "${aws_vpc.teraform-testing-vpc.id}"
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = "${aws_nat_gateway.teraform-testing-priv-a-gw.id}"
+  }
+}
+
+# Create a new route table for the private subnet priv-b
+# And make it route non-local traffic through the NAT gateway to the internet
+resource "aws_route_table" "teraform-testing-rt-priv-b" {
+  vpc_id = "${aws_vpc.teraform-testing-vpc.id}"
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = "${aws_nat_gateway.teraform-testing-priv-b-gw.id}"
+  }
+}
+
+## Route Table Association ##
+
+# pub a
+resource "aws_route_table_association" "pub-a" {
+  subnet_id      = "${aws_subnet.teraform-testing-pub-a.id}"
+  route_table_id = "${aws_route_table.teraform-testing-rt-pub.id}"
+}
+
+# pub b
+resource "aws_route_table_association" "pub-b" {
+  subnet_id      = "${aws_subnet.teraform-testing-pub-b.id}"
+  route_table_id = "${aws_route_table.teraform-testing-rt-pub.id}"
+}
+
+# priv a
+resource "aws_route_table_association" "priv-a" {
+  subnet_id      = "${aws_subnet.teraform-testing-priv-a.id}"
+  route_table_id = "${aws_route_table.teraform-testing-rt-priv-a.id}"
+}
+
+# priv b
+resource "aws_route_table_association" "priv-b" {
+  subnet_id      = "${aws_subnet.teraform-testing-priv-b.id}"
+  route_table_id = "${aws_route_table.teraform-testing-rt-priv-b.id}"
+}
+
+## ALB Confiuration ###
+
+# Defines the ALB
+resource "aws_lb" "nginx-testing-lb" {
+  name               = "nginx-testing-lb"
+  internal           = false
+  load_balancer_type = "application"
+  subnets            = ["${aws_subnet.teraform-testing-pub-a.id}","${aws_subnet.teraform-testing-pub-b.id}"]
+
+  enable_deletion_protection = false
+
+  tags = {
+    Environment = "production"
+  }
+}
+
+# Defines the ALB Target Group
+resource "aws_lb_target_group" "nginx-testing-lb-tg" {
+  name     = "nginx-testing-lb-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = "${aws_vpc.teraform-testing-vpc.id}"
+}
+
+# Defines the ALB Listener
+resource "aws_lb_listener" "nginx-testing-lb-listener" {
+  load_balancer_arn = "${aws_lb.nginx-testing-lb.arn}"
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = "${aws_lb_target_group.nginx-testing-lb-tg.arn}"
+  }
+}
+
+### IAM Role Generation ###
+
+# Create IAM Role
+resource "aws_iam_role" "terraform_test_ecs_role" {
+  name = "terraform_test_ecs_role"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": "sts:AssumeRole",
+      "Principal" : { "AWS" : "*" },
+      "Effect": "Allow",
+      "Sid": ""
+    }
+  ]
+}
+EOF
+}
+
+# Create IAM Policy
+resource "aws_iam_role_policy" "terraform_test_ecs_policy" {
+  name = "terraform_test_ecs_policy"
+  role = "${aws_iam_role.terraform_test_ecs_role.id}"
+
+  policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+}
+
+### ECS Configuration ###
+
+# ECS Cluster creation
+resource "aws_ecs_cluster" "teraform-testing-ecs" {
+  name = "Teraform-testing"
+
+  tags = {
+    Name = "teraform-testing",
+    purpose = "Testing",
+    created_by = "Teraform"
+  }
+}
+
+# Nginx task definition
+resource "aws_ecs_task_definition" "nginx-teraform-testing-task" {
+  family                = "nginx-teraform-testing"
+  container_definitions = "${file("task-definitions/nginx.json")}"
+  network_mode = "awsvpc"
+  cpu = "256"
+  memory = "512"
+  requires_compatibilities = ["FARGATE"]
+
+  placement_constraints {
+    type       = "memberOf"
+    expression = "attribute:ecs.availability-zone in [us-east-1a, us-east-1b]"
+  }
+
+  tags = {
+    Name = "nginx-teraform-testing",
+    purpose = "Testing",
+    created_by = "Teraform"
+  }
+}
+
+# ECS Service Definition
+resource "aws_ecs_service" "nginx" {
+  name            = "nginx"
+  cluster         = "${aws_ecs_cluster.teraform-testing-ecs.id}"
+  task_definition = "${aws_ecs_task_definition.nginx-teraform-testing-task.arn}"
+  desired_count   = 3
+  iam_role        = "${aws_iam_role.terraform_test_ecs_role}"
+  depends_on      = ["aws_iam_role_policy.terraform_test_ecs_policy"]
+
+  ordered_placement_strategy {
+    type  = "binpack"
+    field = "cpu"
+  }
+
+  load_balancer {
+    target_group_arn = "${aws_lb_target_group.nginx-testing-lb-tg.arn}"
+    container_name   = "nginx"
+    container_port   = 80
+  }
+
+  placement_constraints {
+    type       = "memberOf"
+    expression = "attribute:ecs.availability-zone in [us-east-1a, us-east-1b]"
+  }
+}
